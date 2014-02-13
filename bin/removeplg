@@ -1,8 +1,29 @@
-#!/bin/usr/env python
+#!/usr/bin/env python
 
-# Accept path to plg
-# Parse xml
-# Find matching dependencies
-# Find matching files
-# Remove dependencies?
-# Remove files
+import sys
+import os
+import xml.etree.ElementTree as ET
+
+class Plg:
+  def __init__(self, path):
+    self.path = path
+    self.xml  = self.parse_plg()
+    self.files = self.collect_file_paths()
+    self.remove_files()
+
+  def parse_plg(self):
+    return ET.parse(self.path)
+  def collect_file_paths(self):
+    return [node.attrib['Name'] for node in self.xml.iter('FILE')]
+
+  def remove_files(self):
+    for file in self.files:
+      if os.path.exists(file):
+        print "Removing {0}".format(file)
+        os.remove(file)
+
+if __name__ == "__main__":
+  if len(sys.argv) < 2:
+    sys.exit('Usage: %s path/to/plg' % sys.argv[0])
+
+  Plg(sys.argv[1])
