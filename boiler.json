@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "description": "The antithesis to installplg",
   "author": "Nic Aitch <nic@nicinabox.com>",
+  "license": "MIT",
   "dependencies": {
     "python": ""
   }
