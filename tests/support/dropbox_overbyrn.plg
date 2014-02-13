@@ -1,0 +1,994 @@
+<?xml version='1.0' standalone='yes'?>
+
+<!DOCTYPE PLUGIN [
+<!ENTITY plugin "Dropbox">
+<!ENTITY author "overbyrn">
+<!ENTITY plgver "1.4">
+<!ENTITY pkgnam "dropbox">
+<!ENTITY pkg "/boot/packages">
+<!ENTITY plg "/boot/config/plugins/dropbox">
+<!ENTITY img "/boot/config/plugins/images">
+<!ENTITY gui "/usr/local/emhttp/plugins">
+<!ENTITY url1 "https://raw.github.com/overbyrn/UnRAID/master">
+<!ENTITY url2 "https://dl.dropbox.com/u/572553/UnRAID">
+<!ENTITY url3 "http://www.dropbox.com/download">
+<!ENTITY dev "false"><!-- set to "true" during plugin development -->
+]>
+
+<PLUGIN>
+<!--
+Copyright 2013, Rich Manton (overbyrn)
+
+This Plugin installs and provides Dropbox support for unRAID.
+
+Plugin file locations:
+ /boot/plugins/dropbox_overbyrn.plg                                     # this file
+ /tmp/plugin-prepare                                                    # network readiness script
+ /tmp/plugin-chkcfg                                                     # plugin cfg parameter upgrade check
+ /tmp/plugin-cleanup                                                    # deletion script
+ /tmp/plugin-install                                                    # installation script
+
+ /boot/config/plugins/dropbox/dropbox-[ver].tar.gz                      # dropbox application
+ /boot/config/plugins/dropbox/dropbox.py                                # dropbox CLI control script
+
+ /boot/packages/python-2.6.6-i486-1.txz                                 # python (dropbox dependency)
+
+ /boot/config/plugins/dropbox/dropbox.png                               # icon file (copied to webgui plugin dir)
+ /boot/config/plugins/images/device_status.png                          # icon file (copied to webgui plugin dir)
+ /boot/config/plugins/images/new_config.png                             # icon file (copied to webgui plugin dir)
+ /boot/config/plugins/images/information.png                            # icon file (copied to webgui plugin dir)
+ /boot/config/plugins/dropbox/dropbox.cfg                               # non-volatile configuration
+ /etc/rc.d/rc.dropbox                                                   # plugin control script
+ /usr/local/emhttp/plugins/dropbox/dropbox.page                         # page file for webGui menu system
+ /usr/local/emhttp/plugins/dropbox/dropbox.php                          # webGui page code
+
+ /var/log/plugins/dropbox                                               # created upon install success
+ /var/run/dropbox/dropbox.pid                                           # run-time pid file
+
+-->
+
+<FILE Name="/tmp/plugin-prepare" Run="/bin/bash">
+<INLINE>
+# Wait until network is ready
+timer=30
+while [ $timer -gt 0 ]; do
+  gateway=$(route -n | awk '/^0.0.0.0/ {print $2}')
+  if [ -n "$gateway" ] &amp;&amp; [ $(ping -q -n -c 1 $gateway | awk -F, '/received/ {print $2}' | awk '{print $1}') -eq 1 ]; then
+    break
+  fi
+  timer=$((timer-1))
+  sleep 1
+done
+if [ $timer -eq 0 ]; then
+  echo "No network communication !!!"
+fi
+# Remove this script
+rm -f /tmp/plugin-prepare
+</INLINE>
+</FILE>
+
+<FILE Name="&plg;/dropbox.png">
+<URL>-q --no-check-certificate &url2;/plugin.images/dropbox.png</URL>
+</FILE>
+
+<FILE Name="&img;/device_status.png">
+<URL>-q --no-check-certificate &url2;/plugin.images/device_status.png</URL>
+</FILE>
+
+<FILE Name="&img;/new_config.png">
+<URL>-q --no-check-certificate &url2;/plugin.images/new_config.png</URL>
+</FILE>
+
+<FILE Name="&img;/information.png">
+<URL>-q --no-check-certificate &url2;/plugin.images/information.png</URL>
+</FILE>
+
+<FILE Name="&pkg;/python-2.6.6-i486-1.txz" Run="upgradepkg --install-new">
+<URL>-q --no-check-certificate &url2;/packages/&pkgnam;/python-2.6.6-i486-1.txz</URL>
+</FILE>
+
+<FILE Name="&plg;/dropbox.py" >
+<URL>-q --no-check-certificate &url3;?dl=packages/dropbox.py</URL>
+</FILE>
+
+<FILE Name="/tmp/plugin-cleanup" Run="/bin/bash">
+<INLINE>
+# delete file but don't warn if file does not exist
+rmNoWarn() {
+  test -e $1 &amp;&amp; rm $1 2>/dev/null
+}
+
+# delete directory but don't warn if directory does not exist
+rmRecursiveNoWarn() {
+  test -e $1 &amp;&amp; rm -r $1 2>/dev/null
+}
+
+#Remove currently installed plugin files
+rmNoWarn /etc/rc.d/rc.dropbox                            # control script
+rmNoWarn /var/run/dropbox/dropbox.pid                    # stale pid file
+rmRecursiveNoWarn /usr/local/emhttp/plugins/dropbox      # unraid webgui integration files
+rmNoWarn /var/log/plugins/dropbox                        # record of previous plugin installation
+
+rm /tmp/plugin-cleanup
+</INLINE>
+</FILE>
+
+<FILE Name="/boot/config/plugins/dropbox/dropbox.cfg">
+<INLINE>
+# dropbox configuration:
+SERVICE="disable"
+DROPBOXDBDIR="/mnt/disk1/DropboxDB"
+DROPBOXDIR="/mnt/disk1/DropboxData"
+BRANCH="STABLE"
+EXCLUDES=""
+</INLINE>
+</FILE>
+
+<FILE Name="/tmp/plugin-chkcfg" Run="/bin/bash">
+<INLINE>
+<![CDATA[
+#!/bin/bash
+#account for pre-github upgraders.  add parameters introduced in github version of plugin
+paramchk=$(cat /boot/config/plugins/dropbox/dropbox.cfg | grep BRANCH)
+if [[ $paramchk = "" ]]; then
+    echo "" >> /boot/config/plugins/dropbox/dropbox.cfg
+    echo "BRANCH=\"STABLE\"" >> /boot/config/plugins/dropbox/dropbox.cfg
+fi
+paramchk=$(cat /boot/config/plugins/dropbox/dropbox.cfg | grep EXCLUDES)
+if [[ $paramchk = "" ]]; then
+    echo "" >> /boot/config/plugins/dropbox/dropbox.cfg
+    echo "EXCLUDES=\"\"" >> /boot/config/plugins/dropbox/dropbox.cfg
+fi
+rm /tmp/plugin-chkcfg
+]]>
+</INLINE>
+</FILE>
+
+<FILE Name="/etc/rc.d/rc.dropbox" Mode="0770">
+<INLINE>
+<![CDATA[
+#!/bin/bash
+# start|stop|restart|enable|disable|install|buttonstart|updateplg|getver|chk4symlinks dropbox.
+
+dropbox_start()
+{
+  # no-op if not enabled
+  if [ $SERVICE != "enable" ]; then
+    echo "Service is not enabled!"
+    sleep 1
+    return
+  fi
+
+  # no-op if already running
+  if [ -f /var/run/dropbox/dropbox.pid ]; then
+    echo "Dropbox daemon already running!"
+    sleep 1
+    return
+  fi
+
+  # if not installed yet, call install function
+  if [[ ! -d "/usr/local/dropbox/.dropbox" || ! -d "$DROPBOXDBDIR" ]]; then
+    dropbox_install
+  fi
+
+  echo "Starting Dropbox..."
+  sleep 1
+
+  sudo -u nobody HOME=/usr/local/dropbox /usr/local/sbin/dropbox.py start > /dev/null 2>&1
+
+  echo `ps -ef | grep dropbox-dist | grep -v grep | awk '{print $2}'` > /var/run/dropbox/dropbox.pid
+
+  echo "... OK"
+  sleep 1
+}
+
+dropbox_stop()
+{
+  # no-op if already stopped
+  if [ ! -f /var/run/dropbox/dropbox.pid ]; then
+    return
+  fi
+
+  echo "Stopping Dropbox..."
+  sleep 1
+
+  kill $(cat /var/run/dropbox/dropbox.pid)
+  sleep 3
+
+  PID=$(ps -ef | grep dropbox-dist | grep -v grep | awk '{print $2}');
+  test "$PID" != "" && kill -9 $PID
+  sleep 1
+
+  # remove copy of pid created during start
+  rm -f /var/run/dropbox/dropbox.pid
+
+
+  echo "... OK"
+  sleep 1
+}
+
+dropbox_status() {
+  # this can be called from command for diag purposes, and is also called from plugin webgui to feedback status, eg. running, not installed, idle, downloading etc.
+  sudo -u nobody HOME=/usr/local/dropbox /usr/local/sbin/dropbox.py status
+}
+
+dropbox_cmd() {
+  # this can be called from command line for diag purposes
+  if [[ ! -z $1 ]]; then
+    sudo -u nobody HOME=/usr/local/dropbox /usr/local/sbin/dropbox.py $1 $2
+  else
+    echo "usage $0 cmd {dropboxcommand}.     eg. $0 cmd help"
+  fi
+}
+
+dropbox_restart()
+{
+  dropbox_stop
+  dropbox_start
+}
+
+dropbox_buttonstart()
+{
+  CONFIG="/boot/config/plugins/dropbox/dropbox.cfg"
+  if [ -f $CONFIG ]; then
+    sed -i "s/"disable"/"enable/"" $CONFIG
+	SERVICE=enable
+    dropbox_start
+  fi
+}
+
+write_config()
+{
+  echo "# dropbox configuration:" > /boot/config/plugins/dropbox/dropbox.cfg
+  echo "SERVICE=\"$SERVICE\"" >> /boot/config/plugins/dropbox/dropbox.cfg
+  echo "DROPBOXDBDIR=\"$DROPBOXDBDIR\"" >> /boot/config/plugins/dropbox/dropbox.cfg
+  echo "DROPBOXDIR=\"$DROPBOXDIR\"" >> /boot/config/plugins/dropbox/dropbox.cfg
+  echo "BRANCH=\"$BRANCH\"" >> /boot/config/plugins/dropbox/dropbox.cfg
+  echo "EXCLUDES=\"$EXCLUDES\"" >> /boot/config/plugins/dropbox/dropbox.cfg
+}
+
+dropbox_change_settings()
+{
+  #nb. when passing params from enable/disable functions, params will take new numbering. ie. $2 in enable will become the first ($1) param here, and so on
+  DROPBOXDBDIR="$1"
+  DROPBOXDIR="$2"
+  BRANCH="$3"
+  EXCLUDES="$4"
+}
+
+dropbox_enable()
+{
+  echo "Applying Settings ($1) ..."
+  sleep 2
+  SERVICE=$1 #enable
+  dropbox_change_settings $2 $3 $4 $5
+  write_config
+  dropbox_install
+  dropbox_restart
+  echo "... OK"
+  sleep 1
+}
+
+dropbox_disable()
+{
+  echo "Applying Settings ($1) ..."
+  sleep 2
+  dropbox_stop
+  SERVICE=$1 #disable
+  dropbox_change_settings $2 $3 $4 $5
+  write_config
+  echo "... OK"
+  sleep 1
+}
+
+dropbox_install()
+{
+  echo "Installing Dropbox..."
+  sleep 1
+
+  #If dirs configured in plugin webgui do not exist, create them, set their permissions to rwxrwxr-x and ownership to nobody
+  if [ ! -d "$DROPBOXDBDIR" ]; then
+    mkdir $DROPBOXDBDIR
+	chown -R nobody:users $DROPBOXDBDIR
+	chmod -R 0775 $DROPBOXDBDIR
+  fi
+  if [ ! -d "$DROPBOXDIR" ]; then
+    mkdir $DROPBOXDIR
+    chown -R nobody:users $DROPBOXDIR
+    chmod -R 0775 $DROPBOXDIR
+  fi
+
+  #Recreate symlinks in dropbox "home" location to real dirs set via plugin webgui and created above
+  rm -f /usr/local/dropbox/.dropbox
+  ln -s $DROPBOXDBDIR /usr/local/dropbox/.dropbox
+  rm -f /usr/local/dropbox/Dropbox
+  ln -s $DROPBOXDIR /usr/local/dropbox/Dropbox
+
+  #Set ownership and permissions of above symlinks to nobody.  do this by setting recursively on dropbox dir, not the symlinks themselves
+  chown -R nobody:users /usr/local/dropbox
+  chmod -R 0775 /usr/local/dropbox
+
+  echo "... OK"
+  sleep 1
+}
+
+dropbox_updateplg()
+{
+  if [ -f /boot/config/plugins/dropbox_overbyrn.plg ]; then
+    dropbox_stop;
+    echo "Downloading plugin..."
+    wget -q -P /tmp --no-check-certificate https://raw.github.com/overbyrn/UnRAID/master/dropbox_overbyrn.plg 2>/dev/null
+    if [ ! -f /tmp/dropbox_overbyrn.plg ]; then
+      echo "Download failed, update aborted!"
+      sleep 2
+    else
+      echo "...OK"
+      sleep 1
+      echo  "Upgrading plugin..."
+      sleep 1
+      mv -f /boot/config/plugins/dropbox_overbyrn.plg /boot/config/plugins/dropbox/dropbox_overbyrn.plg.sav 2>/dev/null
+      mv -f /tmp/dropbox_overbyrn.plg /boot/config/plugins/dropbox_overbyrn.plg 2>/dev/null
+      /usr/local/sbin/installplg /boot/config/plugins/dropbox_overbyrn.plg 2>/dev/null
+      echo "...OK"
+      sleep 1
+    fi
+    dropbox_start;
+  fi
+}
+
+dropbox_updateapp()
+{
+  dropbox_stop;
+  echo "Downloading Update..."
+  REMAPP=$(wget --no-check-certificate https://dl.dropbox.com/u/572553/UnRAID/plugin.version.control/dropbox_appver.txt -q -O - | grep -i $BRANCH | cut -d: -f2)
+  wget -q -P /tmp --no-check-certificate https://dl.dropbox.com/u/572553/UnRAID/packages/dropbox/$REMAPP 2>/dev/null
+  if [ ! -f /tmp/$REMAPP ]; then
+    echo "Download failed, update aborted!"
+    sleep 2
+  else
+    echo "...OK"
+    sleep 1
+    echo "Upgrading Application..."
+    sleep 1
+    tar -C /usr/local/dropbox -zxvf /tmp/$REMAPP
+    rm -f /boot/config/plugins/dropbox/dropbox*.tar.gz 2>/dev/null
+    mv -f /tmp/$REMAPP /boot/config/plugins/dropbox 2>/dev/null
+    echo "...OK"
+    sleep 1
+  fi
+  dropbox_start;
+}
+
+dropbox_plgver()
+{
+  case "$1" in
+    'local')
+      if [ -f /boot/config/plugins/dropbox_overbyrn.plg ]; then
+        VERSION=$(grep "<\!ENTITY plgver" /boot/config/plugins/dropbox_overbyrn.plg | cut -d\" -f2)
+	  else
+	    VERSION=Unknown
+	  fi
+    ;;
+    'remote')
+      VERSION=$(wget --no-check-certificate -q https://raw.github.com/overbyrn/UnRAID/master/dropbox_overbyrn.plg -O - | grep "<\!ENTITY plgver" | cut -d\" -f2)
+      if [ "$VERSION" == "" ]; then
+        VERSION=Unknown
+      fi
+    ;;
+  esac
+  # nb: remember to use -n to remove CRLF as otherwise php var needs TRIM on the shell_exec line
+  echo -n "$VERSION"
+}
+
+dropbox_appver()
+{
+  case "$1" in
+    'local')
+      VERSION=$(cat /usr/local/dropbox/.dropbox-dist/VERSION)
+	  if [ "$VERSION" == "" ]; then
+        VERSION=Unknown
+      fi
+    ;;
+    'remote')
+      APPVER=$(wget --no-check-certificate https://dl.dropbox.com/u/572553/UnRAID/plugin.version.control/dropbox_appver.txt -q -O - | grep -i $BRANCH | cut -d: -f2)
+      VERSION=$(basename "$APPVER" .tar.gz | cut -d- -f3)
+      if [ "$VERSION" == "" ]; then
+        VERSION=Unknown
+      fi
+    ;;
+  esac
+  echo -n "$VERSION"
+}
+
+dropbox_cliver()
+{
+  VERSION=$(grep "part of nautilus-dropbox" /usr/local/sbin/dropbox.py | awk '{print $8}'| sed '$ s/.$//')
+  if [ "$VERSION" == "" ]; then
+    VERSION=Unknown
+  fi
+  echo -n "$VERSION"
+}
+
+dropbox_getver()
+{
+  case "$1" in
+    'plg')
+      dropbox_plgver $2
+    ;;
+    'app')
+      dropbox_appver $2
+    ;;
+    'cli')
+      dropbox_cliver
+    ;;
+  esac
+}
+
+dropbox_chk4symlinks()
+{
+# Check for symlink in Dropbox Database Directory.  eg. /mnt/disk1/.dropbox/.dropbox -> /mnt/disk1/.dropbox
+if [ -L $DROPBOXDBDIR/$(basename $DROPBOXDBDIR) ]; then   #Found, now we need to canonicalize to see if it points to itself
+  REALFILE=$(readlink $DROPBOXDBDIR/$(basename $DROPBOXDBDIR))
+  if [ $REALFILE = $DROPBOXDBDIR ]; then  #Is $REALFILE = to $DROPBOXDBDIR?
+    # Yes, the symlink is recursive, nuke it
+    rm -f $DROPBOXDBDIR/$(basename $DROPBOXDBDIR)
+  fi
+fi
+# Check for symlink in Dropbox Data Directory.  eg. /mnt/disk1/Dropbox/Dropbox -> /mnt/disk1/Dropbox
+if [ -L $DROPBOXDIR/$(basename $DROPBOXDIR) ]; then   #Found, now we need to canonicalize to see if it points to itself
+  REALFILE=$(readlink $DROPBOXDIR/$(basename $DROPBOXDIR))
+  if [ $REALFILE = $DROPBOXDIR ]; then  #Is $REALFILE = to $DROPBOXDIR?
+    # Yes, the symlink is recursive, nuke it
+    rm -f $DROPBOXDIR/$(basename $DROPBOXDIR)
+  fi
+fi
+}
+
+dropbox_commithist()
+{
+  # use the GitHub API to retrieve the commit history for file passed as argument to this function
+  # this is done in two phases;
+  # 1. obtain the SHA hash for the most recent commit of the given file
+  # 2. construct URL which will present a consolidated list of commits from most recent to oldest for given file
+  if [ ! -z "$1" ]; then
+    LAST_SHA=$(wget --no-check-certificate -q https://api.github.com/repos/overbyrn/UnRAID/commits?path=$1 -O - | grep -Pom 1 '"sha":.*?[^\\]",' | sed 's/[\",]//g' | cut -d' ' -f2)
+    if [ ! -z "$LAST_SHA" ]; then
+      COMMIT_URL=https://github.com/overbyrn/UnRAID/commits/$LAST_SHA/$1
+      #echo "LAST_SHA = $LAST_SHA"
+      #echo "COMMIT_URL = $COMMIT_URL"
+      echo -n "$COMMIT_URL"
+    else
+      echo -n "URL could not be retrieved"
+    fi
+  else
+    echo "Error: function expects name of file to be passed as parameter"
+  fi
+}
+
+# read our configuration
+source /boot/config/plugins/dropbox/dropbox.cfg
+
+case "$1" in
+  'start')
+    dropbox_start
+  ;;
+  'stop')
+    dropbox_stop
+  ;;
+  'restart')
+    dropbox_restart
+  ;;
+  'enable')
+    #echo "p1 = $1, p2 = $2, p3 = $3, p4 = $4, p5 = $5"
+	#sleep 5
+	#eg. $1 = service state, $2 = dropbox DB dir, $3 = dropbox dir, $4 = branch, $5 = dir exclusions
+	dropbox_enable $1 $2 $3 $4 $5
+  ;;
+  'disable')
+    #echo "p1 = $1, p2 = $2, p3 = $3, p4 = $4, p5 = $5"
+	#sleep 5
+	#eg. $1 = service state, $2 = dropbox DB dir, $3 = dropbox dir, $4 = branch, $5 = dir exclusions
+    dropbox_disable $1 $2 $3 $4 $5
+  ;;
+  'install')
+    dropbox_install
+  ;;  
+  'buttonstart')
+    dropbox_buttonstart
+  ;;
+  'status')
+    dropbox_status
+  ;;  
+  'updateplg')
+    dropbox_updateplg
+  ;;
+  'updateapp')
+    dropbox_updateapp
+  ;;
+  'getver')
+    dropbox_getver $2 $3
+  ;; 
+  'cmd')
+    dropbox_cmd $2 $3
+  ;;  
+  'chk4symlinks')
+    dropbox_chk4symlinks
+  ;;
+  'commithist')
+    dropbox_commithist $2
+    ;;    
+  *)
+    echo "usage $0 start|stop|restart|enable|disable|install|buttonstart|updateplg|updateapp|getver|status|cmd|chk4symlinks|commithist <argv0>"
+esac
+]]>
+</INLINE>
+</FILE>
+
+<FILE Name="/usr/local/emhttp/plugins/dropbox/dropbox.png">
+<LOCAL>/boot/config/plugins/dropbox/dropbox.png</LOCAL>
+</FILE>
+
+<FILE Name="/usr/local/emhttp/plugins/dropbox/device_status.png">
+<LOCAL>/boot/config/plugins/images/device_status.png</LOCAL>
+</FILE>
+
+<FILE Name="/usr/local/emhttp/plugins/dropbox/new_config.png">
+<LOCAL>/boot/config/plugins/images/new_config.png</LOCAL>
+</FILE>
+
+<FILE Name="/usr/local/emhttp/plugins/dropbox/information.png">
+<LOCAL>/boot/config/plugins/images/information.png</LOCAL>
+</FILE>
+
+<FILE Name="/usr/local/emhttp/plugins/dropbox/dropbox.php">
+<INLINE>
+<![CDATA[
+<?PHP
+$dropbox_cfg = parse_ini_file( "/boot/config/plugins/dropbox/dropbox.cfg");
+$dropbox_installed = is_dir( $dropbox_cfg['DROPBOXDBDIR'] ) ? "yes" : "no";
+$dropbox_commithist = shell_exec ( "/etc/rc.d/rc.dropbox commithist dropbox_overbyrn.plg" );
+if ($dropbox_installed=="yes") {
+  $dropbox_running = file_exists( "/var/run/dropbox/dropbox.pid" ) ? "yes" : "no";
+}
+
+#Blah, this next bit is truely hacky.
+#Dropbox after successful activation/link, changes the directory permissions of Dropbox Data location.  NOT the files within that dir though.
+#This isn't a problem for most situations as the daemon runs as user NOBODY and it is assumed the majority of users will access their Dropbox
+#directory over a public "guest" share.  But when you accessing with assigned users, it gets messy as the user will not have the correct
+#permissions to enter the directory.  We can't really detect when the activation state is complete as subsequent dropbox status values could
+#be a mixture of idle, indexing files, downloading files etc.  So, assume a user upon successful activation is going to either refresh this
+#page or exit and reenter.  In which case, blindly do a chmod on the Dropbox directory to reset its permissions to something more friendly.
+if (is_dir($dropbox_cfg['DROPBOXDIR'])) {
+  chmod($dropbox_cfg['DROPBOXDIR'],0775);
+}
+#Also, it changes the Dropbox Database dir right after the initial daemon start.  So for completeness, make that more permission friendly too
+#even though it's less of an issue as this dir is only ever accessed by the deamon itself and so technically it should never be noticed.
+if (is_dir($dropbox_cfg['DROPBOXDBDIR'])) {
+  chmod($dropbox_cfg['DROPBOXDBDIR'],0775);
+}
+
+#one more hack for good luck.  this one handles recurive symlinks.  some users report seeing recursive directories being created.  I have been able to reproduce
+#the issue occasionally, but each time I have not found the root cause.  On times when it did occur, symlinks were created such as the following examples:
+#real dropbox db dir = /mnt/disk1/.dropbox
+#symlink exists of /mnt/disk1/.dropbox/.dropbox -> /mnt/disk1/.dropbox
+#or
+#real dropbox dir = /mnt/disk1/Dropbox
+#symlink exists of /mnt/disk1/Dropbox/Dropbox -> /mnt/disk1/Dropbox
+#this following calls a function in the back-end rc script to check for the presence of these symlinks and remove them.  It will only delete a symlink
+#such as the examples above.  If by some chance a symlink of that name exists but points to another location, it will NOT delete it.  Making it fairly
+#safe to assume no user data will ever be deleted.  It also ONLY checks for symlinks, so if a user has a file of the same name, it will NOT delete it.
+shell_exec("/etc/rc.d/rc.dropbox chk4symlinks");
+
+$status = exec( "sudo -u nobody HOME=/usr/local/dropbox /usr/local/sbin/dropbox.py status" );
+switch ($status) {
+  case "Waiting to be linked to an account...":
+    $actlink = exec( "sudo -u nobody HOME=/usr/local/dropbox /usr/local/sbin/dropbox.py start" );
+    break;
+  case "Dropbox isn't running!":
+    break;
+  }
+$dropbox_localplg = shell_exec("/etc/rc.d/rc.dropbox getver plg local");
+$dropbox_remoteplg = shell_exec("/etc/rc.d/rc.dropbox getver plg remote");
+$dropbox_localapp = shell_exec("/etc/rc.d/rc.dropbox getver app local");
+$dropbox_remoteapp = shell_exec("/etc/rc.d/rc.dropbox getver app remote");
+$dropbox_cliver = shell_exec("/etc/rc.d/rc.dropbox getver cli");
+$controls_exist = "false";
+$updates_exist = "false";
+?>
+
+<html>
+<head></head>
+<body>
+
+<div style="width: 49%; float:left; border: 0px solid black;">
+  <div id="title">
+    <span class="left">Status:&nbsp;<img src='/plugins/dropbox/device_status.png'>
+      <?if ($dropbox_installed=="yes"):?>
+        <?if ($dropbox_running=="yes"):?>
+            <?if (!empty($actlink)):?>
+              <!-- actlink contains a value, display text as hyperlink -->
+              <span class="green"><b><a href="<?=$actlink;?>" style="color: orange; text-decoration:none;" onmouseover="this.style.textDecoration='underline'" onmouseout="this.style.textDecoration='none'" title="Click here to open activation link in new page. Then come back here and refresh page to see status." target="_blank"><?=$status;?>&nbsp;&nbsp;[Click to open link in new page]</a></b></span>
+            <?else:?>
+              <!-- display regular status text -->
+              <span class="green"><b><?=$status;?></b></span>
+            <?endif;?>
+        <?else:?>
+          <!-- say not running -->
+          <span class="red"><b><?=$status;?></b></span>
+        <?endif;?>
+      <?else:?>
+        <span class="red"><b>NOT INSTALLED</b></span>
+      <?endif;?>
+    </span>
+  </div>
+
+  <?if ($dropbox_installed=="yes"):?>
+    <div style="border: 0px solid black;">
+      <span class="left">
+        <table>
+        <colgroup>
+          <col span="1" style="width: 25%;">
+          <col span="1" style="width: 25%;">
+          <col span="1" style="width: 40%;">
+        </colgroup>
+        <tr>
+          <td>Dropbox Application Version:</td>
+          <td><span class="green-text"><b>v<?=$dropbox_localapp?></b></span></td>
+        </tr>
+        <tr>
+          <td>Dropbox CLI Script Version:</td>
+          <td><span class="green-text"><b>v<?=$dropbox_cliver?></b></span></td>
+        </tr>
+        </table>
+	  </span>
+    </div>
+  <?endif;?>
+
+  <br></br>
+
+  <div style="border: 0px solid black;">
+    <table>
+      <tr style="font-weight:bold; color:#333333; background:#F0F0F0; text-shadow:0 1px 1px #FFFFFF;">
+        <td>Dropbox Build / Plugin</td>
+        <td>Local Version</td>
+        <td>Online Version</td>
+      </tr>
+      <tr style="font-weight:bold; background:#FFFFFF;">
+        <td>Dropbox Version</td>
+        <td>
+          <?if ($dropbox_localapp != "Unknown"):?>
+            <span class="green-text">v<?=$dropbox_localapp?></span>
+          <?else:?>
+            <span class="red-text">UNKNOWN</span>
+          <?endif;?>
+        </td>
+        <td>
+          <?if ($dropbox_remoteapp != "Unknown"):?>
+            <span class="green-text">v<?=$dropbox_remoteapp?></span>
+          <?else:?>
+            <span class="red-text">UNKNOWN</span>
+          <?endif;?>
+        </td>
+      </tr>
+      <tr style="font-weight:bold; background:#FFFFFF;">
+        <td>Dropbox Plugin</td>
+        <td>
+          <?if ($dropbox_localplg != "Unknown"):?>
+              <span class="green-text">v<?=$dropbox_localplg?></span>
+          <?else:?>
+            <span class="red-text">UNKNOWN</span>
+          <?endif;?>
+        </td>
+        <td>
+          <?if ($dropbox_remoteplg != "Unknown"):?>
+            <?if ($dropbox_commithist == "URL could not be retrieved"):?>  <!-- we didnt obtain the commit history for some reason, so just display the version -->
+              <span class="green-text"><?=$dropbox_remoteplg?></span>
+            <?else:?>
+              <span class="green-text">
+                <?=$dropbox_remoteplg?>
+                <a href="<?=$dropbox_commithist?>" style="color: green; text-decoration:none;" onmouseover="this.style.textDecoration='underline'" onmouseout="this.style.textDecoration='none'" title="GitHub Commit History" target="_blank">
+                  <span class="green">
+                    <b>[Commit Log]</b>
+                  </span>
+                </a>
+              </span>
+            <?endif;?> 
+          <?else:?>
+            <span class="red-text">UNKNOWN</span>
+          <?endif;?>
+        </td>
+      </tr>
+    </table>
+  </div>
+
+  <br></br>
+
+  <div>
+    <table>
+      <tr style="font-weight:bold; color:#333333; background:#F0F0F0; text-shadow:0 1px 1px #FFFFFF;">
+        <td colspan="2">Control</td>
+      </tr>
+    <?if ($dropbox_installed=="yes"):?>
+      <?if ($dropbox_running=="yes"):?>
+        <tr>
+        <td width="30%">
+          <form name="dropbox_start_stop" method="POST" action="/update.htm" target="progressFrame">
+            <input type="hidden" name="cmd" value="/etc/rc.d/rc.dropbox stop">
+            <input type="submit" name="runCmd" value="Stop">
+          </form>
+        </td>
+        <td>Stop Dropbox Daemon</td>
+        </tr>
+        <tr>
+        <td width="30%">
+          <form name="dropbox_restart" method="POST" action="/update.htm" target="progressFrame">
+            <input type="hidden" name="cmd" value="/etc/rc.d/rc.dropbox restart">
+            <input type="submit" name="runCmd" value="Restart">
+          </form>
+        </td>
+        <td>Restart Dropbox Daemon</td>
+        </tr>
+        <?$controls_exist = "true"?>
+      <?else:?>
+        <tr>
+        <td width="30%">
+          <form name="dropbox_start" method="POST" action="/update.htm" target="progressFrame">
+            <input type="hidden" name="cmd" value="/etc/rc.d/rc.dropbox buttonstart">
+            <input type="submit" name="runCmd" value="Start">
+          </form>
+        </td>
+        <td>Start Dropbox Daemon</td>
+        </tr>
+        <?$controls_exist = "true"?>
+      <?endif;?>
+    <?else:?>
+        <tr>
+      <td width="30%">
+        <form name="dropbox_install" method="POST" action="/update.htm" target="progressFrame">
+          <input type="hidden" name="cmd" value="/etc/rc.d/rc.dropbox install">
+          <input type="submit" name="runCmd" value="Install">
+        </form>
+      </td>
+      <td>Install Dropbox Application</td>
+      </tr>
+      <?$controls_exist = "true"?>
+    <?endif;?>
+
+    <?if ($controls_exist=="false"):?>
+      <tr>
+        <td colspan="2" align="center">No Control Actions available</td>
+      </tr>
+    <?endif;?>
+    </table>
+  </div>
+
+  <br></br>
+
+  <div style="border: 0px solid black;">
+    <table>
+      <tr style="font-weight:bold; color:#333333; background:#F0F0F0; text-shadow:0 1px 1px #FFFFFF;">
+        <td colspan="2">Updates</td>
+      </tr>
+      <?if (($dropbox_remoteplg != $dropbox_localplg) && ($dropbox_localplg != "Unknown") && ($dropbox_remoteplg != "Unknown")): ?>
+        <tr>
+        <td width="30%">
+          <form name="dropbox_updateplg" method="POST" action="/update.htm" target="progressFrame">
+            <input type="hidden" name="cmd" value="/etc/rc.d/rc.dropbox updateplg">
+            <input type="submit" name="runCmd" value="Update Plugin">
+          </form>
+        </td>
+        <td><span class="red-text">An update is available to the plugin</span></td>
+        </tr>
+        <?$updates_exist="true"?>
+      <?endif;?>
+
+      <?if (($dropbox_remoteapp > $dropbox_localapp) && ($dropbox_localapp != "Unknown") && ($dropbox_remoteapp != "Unknown")): ?>
+        <tr>
+          <td width="30%">
+          <form name="dropbox_updateapp" method="POST" action="/update.htm" target="progressFrame">
+            <input type="hidden" name="cmd" value="/etc/rc.d/rc.dropbox updateapp">
+            <input type="submit" name="runCmd" value="Update Dropbox Build">
+          </form>
+          </td>
+          <td><span class="red-text">An update is available to Dropbox</span></td>
+        </tr>
+        <?$updates_exist="true"?>
+      <?endif;?>
+
+      <?if ($updates_exist=="false"):?>
+        <tr>
+          <td colspan="2" align="center">No updates available at this time</td>
+        </tr>
+      <?endif;?>
+    </table>
+  </div>
+  <br></br>
+  <br></br>
+</div>
+
+<div style="width: 49%; float:right; border: 0px solid black;">
+  <div id="title">
+    <span class="left">Configuration:&nbsp;<img src='/plugins/dropbox/new_config.png'></span>
+  </div>
+  <form name="dropbox_settings" method="POST" action="/update.htm" target="progressFrame" onsubmit="validateForm();">
+    <input type="hidden" name="cmd" value="/etc/rc.d/rc.dropbox">
+    <table class="settings">
+      <tr>
+        <td>Enable Dropbox Service:</td>
+        <td>
+          <select name="arg1" id="arg1" size="1">
+            <?=mk_option($dropbox_cfg['SERVICE'], "disable", "No");?>
+            <?=mk_option($dropbox_cfg['SERVICE'], "enable", "Yes");?>
+          </select>
+        </td>
+      </tr>
+      <tr>
+        <td>Dropbox Database Directory:</td>
+        <td><input type="text" name="arg2" id="arg2" maxlength="60" value="<?=$dropbox_cfg['DROPBOXDBDIR'];?>"></td>
+      </tr>
+      <tr>
+        <td>Dropbox Data Directory:</td>
+        <td><input type="text" name="arg3" id="arg3" maxlength="60" value="<?=$dropbox_cfg['DROPBOXDIR'];?>"></td>
+      </tr>
+      <tr>
+        <td>Dropbox Branch:</td>
+        <td>
+        <select name="arg4" id="arg4" size="1">
+          <?=mk_option($dropbox_cfg['BRANCH'], "STABLE", "Stable");?>
+          <?=mk_option($dropbox_cfg['BRANCH'], "EXPERIMENTAL", "Experimental");?>
+        </select>
+        </td>
+      </tr>
+      <!-- we're not exposing this option to the user (yet)
+      <tr>
+        <td>Dropbox Directory Exclusions:</td>
+        <td><input type="text" name="arg5" id="arg5" maxlength="60" value="<?=$dropbox_cfg['EXCLUDES'];?>"></td>
+      </tr>
+      -->
+    </table>
+    <div align="center">
+      <hr size="3" align="center" width="75%" color="grey" style="margin-top:20px;margin-bottom:18px">
+      <input type="submit" name="runCmd" value="Apply"><button type="button" onClick="done();">Done</button>
+    </div>
+  </form>
+  <br />
+</div>
+
+<script type="text/javascript">
+function validateForm() {
+  document.getElementById('arg2').disabled = false;
+  document.getElementById('arg3').disabled = false;
+  document.getElementById('arg4').disabled = false;
+  document.getElementById('arg5').disabled = false;
+}
+
+function checkRUNNING(form) {
+  if ("<?=$dropbox_running;?>" == "yes") {
+    form.arg2.disabled = true;
+    form.arg3.disabled = true;
+    form.arg4.disabled = true;
+    form.arg5.disabled = true;
+  }
+}
+
+checkRUNNING(document.dropbox_settings);
+</script>
+
+</body>
+</html>
+]]>
+</INLINE>
+</FILE>
+
+<!-- event handler -->
+<FILE Name="/usr/local/emhttp/plugins/dropbox/event/disks_mounted" Mode="0770">
+<INLINE>
+<![CDATA[
+#!/bin/bash
+#load plugin config
+source /boot/config/plugins/dropbox/dropbox.cfg
+
+#Start dropbox if enabled
+[ $SERVICE = "enable" ] && /etc/rc.d/rc.dropbox start
+]]>
+</INLINE>
+</FILE>
+
+<!-- event handler -->
+<FILE Name="/usr/local/emhttp/plugins/dropbox/event/unmounting_disks" Mode="0770">
+<INLINE>
+<![CDATA[
+#!/bin/bash
+/etc/rc.d/rc.dropbox stop
+]]>
+</INLINE>
+</FILE>
+
+<FILE Name="/tmp/plugin-install" Run="/bin/bash">
+<INLINE>
+#load plugin config
+source /boot/config/plugins/dropbox/dropbox.cfg
+
+#create dropbox application directory
+[[ ! -d /usr/local/dropbox ]] &amp;&amp; mkdir -p /usr/local/dropbox
+
+# Check for and if necessary download the latest build as referenced in appver.txt
+# Ensures the plugin will always install the latest available build as otherwise a previous in-plugin upgrade will revert to older build
+# if one was previously downloaded to the plugin dir.
+REMAPP=$(wget --no-check-certificate https://dl.dropbox.com/u/572553/UnRAID/plugin.version.control/dropbox_appver.txt -q -O - | grep -i $BRANCH | cut -d: -f2)
+echo "Looking for locally saved version of $REMAPP"
+if [[ ! -e &plg;/$REMAPP ]]; then
+  echo "Local saved version does not exist, downloading $REMAPP to /tmp"
+  wget -q -P /tmp --no-check-certificate https://dl.dropbox.com/u/572553/UnRAID/packages/dropbox/$REMAPP 2>/dev/null
+  echo "Installing Dropbox from file: /tmp/$REMAPP..."
+  tar -C /usr/local/dropbox -zxvf /tmp/$REMAPP
+  echo "Deleting any old builds which may be at &plg;..."
+  rm -f &plg;/dropbox*.tar.gz
+  echo "Moving downloaded version from /tmp/$REMAPP to &plg;/$REMAPP..."
+  mv -f /tmp/$REMAPP &plg;
+else
+  echo "Found an up to date locally saved version of $REMAPP at &plg;"
+  echo "Installing Dropbox from file: &plg;/$REMAPP..."
+  tar -C /usr/local/dropbox -zxvf &plg;/$REMAPP
+fi
+
+#install Dropbox CLI script (used as wrapper to control main dropbox python app)
+cp &plg;/dropbox.py /usr/local/sbin/dropbox.py
+
+#set ownership and permission of dropbox application
+chown -R nobody:users /usr/local/dropbox 2>/dev/null
+chmod -R 775 /usr/local/dropbox 2>/dev/null
+
+#set ownership and permissions of CLI script
+chmod 0755 /usr/local/sbin/dropbox.py
+chown nobody:users /usr/local/sbin/dropbox.py
+
+# create dropbox-writable directory for pid file
+[ ! -d /var/run/dropbox ] &amp;&amp; mkdir -m 0777 /var/run/dropbox
+
+rm /tmp/plugin-install
+</INLINE>
+</FILE>
+
+
+<FILE Name="/usr/local/emhttp/plugins/dropbox/dropbox.page">
+<INLINE>
+Menu="NetworkServices"
+Icon="dropbox.png"
+Version="&plgver;"
+Author="&author;"
+Type="php"
+Title="&plugin;"
+</INLINE>
+</FILE>
+
+<FILE Name="/var/log/plugins/dropbox">
+<INLINE>
+&plugin; v&plgver;
+</INLINE>
+</FILE>
+
+<FILE Name="/tmp/plugin-development" Run="/bin/bash">
+<INLINE>
+if [ "&dev;" == "true" ]; then
+  if [ -f /boot/config/plugins/dropbox.php ]; then
+    rm -f &gui;/dropbox/dropbox.php
+    ln -s /boot/config/plugins/dropbox.php &gui;/dropbox/dropbox.php
+  else
+    mv &gui;/dropbox/dropbox.php /boot/config/plugins/dropbox.php
+    ln -s /boot/config/plugins/dropbox.php &gui;/dropbox/dropbox.php
+  fi
+  if [ -f /boot/config/plugins/rc.dropbox ]; then
+    rm -f /etc/rc.d/rc.dropbox
+    ln -s /boot/config/plugins/rc.dropbox /etc/rc.d/rc.dropbox
+  else
+    mv /etc/rc.d/rc.dropbox /boot/config/plugins/rc.dropbox
+    ln -s /boot/config/plugins/rc.dropbox /etc/rc.d/rc.dropbox
+  fi
+fi
+
+rm /tmp/plugin-development
+</INLINE>
+</FILE>
+
+</PLUGIN>

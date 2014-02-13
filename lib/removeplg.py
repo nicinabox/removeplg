@@ -26,8 +26,7 @@ class RemovePlg:
     return raw_input("Are you sure you want to remove {0}? Other packages may depend on it. [yN]".format(name))
 
   def remove_package(self, file):
-    name = os.path.basename(file)
-    os.system("removepkg {0}".format(name))
+    os.system("removepkg {0}".format(file))
 
   def __remove_file(self, file):
     if not os.path.exists(file): return
