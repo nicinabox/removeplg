@@ -17,10 +17,6 @@ class RemovePlg:
 
     return ET.parse(self.path)
 
-  def remove_files(self):
-    for file in self.files:
-      self.__remove_file(file)
-
   def prompt_for_removal(self, file):
     name = os.path.basename(file)
     return raw_input("Are you sure you want to remove {0}? Other packages may depend on it. [yN]".format(name))
@@ -28,7 +24,11 @@ class RemovePlg:
   def remove_package(self, file):
     os.system("removepkg {0}".format(file))
 
-  def __remove_file(self, file):
+  def remove_files(self):
+    for file in self.files:
+      self.remove_file(file)
+
+  def remove_file(self, file):
     if not os.path.exists(file): return
 
     print "Removing {0}".format(file)
