@@ -2,9 +2,10 @@
 
 import sys
 import os
+import re
 import xml.etree.ElementTree as ET
 
-class Plg:
+class RemovePlg:
   def __init__(self, path):
     self.path = path
     self.xml  = self.parse_plg()
@@ -12,18 +13,40 @@ class Plg:
     self.remove_files()
 
   def parse_plg(self):
+    if not os.path.exists(self.path):
+      sys.exit('{0} not found'.format(self.path))
+
     return ET.parse(self.path)
+
   def collect_file_paths(self):
     return [node.attrib['Name'] for node in self.xml.iter('FILE')]
 
   def remove_files(self):
     for file in self.files:
       if os.path.exists(file):
-        print "Removing {0}".format(file)
-        os.remove(file)
+        if self._is_package(file):
+          answer = self.prompt_for_removal(file)
+          if answer == 'y':
+            os.remove(file)
+            self.remove_package(file)
+
+        else:
+          print "Removing {0}".format(file)
+          os.remove(file)
+
+  def prompt_for_removal(self, file):
+    name = os.path.basename(file)
+    return raw_input("Are you sure you want to remove {0}? Other packages may depend on it. [yN]".format(name))
+
+  def remove_package(self, file):
+    name = os.path.basename(file)
+    os.system("removepkg {0}".format(name))
+
+  def _is_package(self, file):
+    return re.search('\.t\wz$', file)
 
 if __name__ == "__main__":
   if len(sys.argv) < 2:
     sys.exit('Usage: removeplg path/to/plg')
 
-  Plg(sys.argv[1])
+  RemovePlg(sys.argv[1])
