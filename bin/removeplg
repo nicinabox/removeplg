@@ -7,11 +7,11 @@ root_path = os.path.abspath(os.path.join(os.path.dirname(real_path), '..'))
 lib_path  = os.path.join(root_path, 'lib')
 sys.path.insert(0, lib_path)
 
-from removeplg import RemovePlg
+from plg import Plg
 
 if __name__ == "__main__":
   if len(sys.argv) < 2:
     sys.exit('Usage: removeplg path/to/plg')
 
-  instance = RemovePlg(sys.argv[1])
-  instance.remove_files()
+  plg = Plg(sys.argv[1])
+  plg.remove_files()

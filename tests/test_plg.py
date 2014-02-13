@@ -3,15 +3,15 @@ import sys
 import os
 sys.path.insert(0, os.path.abspath('lib'))
 
-from removeplg import RemovePlg
+from plg import Plg
 
-class TestRemovePlg(unittest.TestCase):
+class TestPlg(unittest.TestCase):
   def setUp(self):
-    self.fixture = RemovePlg('tests/support/dropbox_overbyrn.plg')
+    self.fixture = Plg('tests/support/dropbox_overbyrn.plg')
 
   def test_returns_not_found(self):
     with self.assertRaises(SystemExit) as cm:
-      RemovePlg('plugin.plg')
+      Plg('plugin.plg')
       self.assertEqual(cm.exception, "plugin.plg not found")
 
   def test_xml(self):

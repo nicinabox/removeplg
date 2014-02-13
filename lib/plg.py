@@ -5,7 +5,7 @@ import os
 import re
 import xml.etree.ElementTree as ET
 
-class RemovePlg:
+class Plg:
   def __init__(self, path):
     self.path = path
     self.xml  = self.parse_plg()
@@ -19,7 +19,7 @@ class RemovePlg:
 
   def prompt_for_removal(self, file):
     name = os.path.basename(file)
-    return raw_input("Are you sure you want to remove {0}? Other packages may depend on it. [yN]".format(name))
+    return raw_input("Are you sure you want to remove {0}? Other packages may depend on it. [yN] ".format(name))
 
   def remove_package(self, file):
     os.system("removepkg {0}".format(file))
