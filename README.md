@@ -1,10 +1,16 @@
 # removeplg
 
-A simple removal script for removing and installed plg on unRAID
+The antithesis of installplg.
 
 ## Install
 
     boiler install removeplg
+
+## Usage
+
+    $ removeplg /boot/plugins/plugin.plg
+
+If the plg has a running service, please stop it first.
 
 ## License
 

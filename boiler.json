@@ -1,7 +1,7 @@
 {
   "name": "removeplg",
   "version": "0.1.0",
-  "description": "The antithesis to installplg",
+  "description": "The antithesis of installplg",
   "author": "Nic Aitch <nic@nicinabox.com>",
   "license": "MIT",
   "dependencies": {
