@@ -6,5 +6,6 @@
   "license": "MIT",
   "dependencies": {
     "python": ""
-  }
+  },
+  "ignore": ["tests"]
 }
