@@ -2,7 +2,10 @@
 
 import sys
 import os
-sys.path.insert(0, os.path.abspath('lib'))
+real_path = os.path.realpath(__file__)
+root_path = os.path.abspath(os.path.join(os.path.dirname(real_path), '..'))
+lib_path  = os.path.join(root_path, 'lib')
+sys.path.insert(0, lib_path)
 
 from removeplg import RemovePlg
 
