@@ -10,7 +10,6 @@ class RemovePlg:
     self.path = path
     self.xml  = self.parse_plg()
     self.files = self.__collect_file_paths()
-    self.remove_files()
 
   def parse_plg(self):
     if not os.path.exists(self.path):
