@@ -1,0 +1,8 @@
+#!/bin/usr/env python
+
+# Accept path to plg
+# Parse xml
+# Find matching dependencies
+# Find matching files
+# Remove dependencies?
+# Remove files

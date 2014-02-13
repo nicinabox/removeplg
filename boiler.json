@@ -1,0 +1,8 @@
+{
+  "name": "removeplg",
+  "version": "0.1.0",
+  "description": "The antithesis to installplg",
+  "dependencies": {
+    "python": ""
+  }
+}
